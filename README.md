@@ -1,106 +1,180 @@
-# Background Job Orchestrator (Inngest + FastAPI)
+![Background Job Orchestrator Banner](./assets/banner.svg)
 
-An asynchronous background job processing system built with Python, FastAPI, and Inngest. This project demonstrates non-blocking request handling, event-driven task processing, status polling, automatic retries with backoff, and scheduled cron jobs.
-
----
-
-## 🏛️ Architectural Overview
-
-This application separates **HTTP request ingestion** from **heavy work execution**:
-- **Non-Blocking Ingestion (Fast 202 Accepted)**: When a user requests a report via `POST /reports`, the API immediately validates the payload, assigns a unique report ID, persists a `pending` status record in memory, and emits a `report/requested` event to Inngest. The API responds immediately with an **HTTP 202 Accepted** status code in under 1 second, keeping the request loop fast and responsive.
-- **Asynchronous Execution Pattern**: The heavy work (e.g. 8-second simulation, building report content) is offloaded asynchronously to background workers managed by Inngest.
-- **Status Polling**: Clients query `GET /reports/{id}` to poll the processing state until it transitions from `pending` to `done` (or `failed`).
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python Version" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Inngest-SDK-4A154B?style=for-the-badge&logo=inngest&logoColor=white" alt="Inngest SDK" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License" />
+</p>
 
 ---
 
-## 🚀 Getting Started
+## Architectural Overview
 
-### 1. Start the FastAPI Application
+The Background Job Orchestrator is designed to handle long-running computing tasks without degrading web server responsiveness or blocking client HTTP connections. 
+
+### Core Architectural Principles
+
+1. **Non-Blocking HTTP Ingestion (HTTP 202 Accepted)**  
+   When a client issues a request to generate a report via `POST /reports`, the application validates the payload immediately. Upon successful validation, it generates a unique tracking identifier, persists an initial state (`pending`) in memory, and dispatches an event (`report/requested`) to the event bus via `inngest_client.send`. The API returns an **HTTP 202 Accepted** response payload within milliseconds, freeing the client connection instantly.
+
+2. **Event-Driven Asynchronous Execution**  
+   The heavy processing (simulated heavy calculation, external API integrations, or PDF compilation) is handled asynchronously out-of-band by Inngest background workers. The background function executes steps deterministically with state persistence across retries.
+
+3. **Status Polling Pattern**  
+   Clients monitor job completion asynchronously by querying `GET /reports/{id}`. State transitions from `pending` to `done` (or `failed`) are reflected dynamically in the in-memory data store.
+
+### Request Lifecycle Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant FastAPI as FastAPI Server
+    participant Inngest as Inngest Engine
+    participant Worker as Inngest Step Worker
+
+    Client->>FastAPI: POST /reports {"topic": "AI Trends"}
+    FastAPI->>FastAPI: Validate payload & store state (status=pending)
+    FastAPI->>Inngest: Dispatch event report/requested
+    FastAPI-->>Client: HTTP 202 Accepted {"id": "uuid", "status": "pending"}
+    
+    Inngest->>Worker: Trigger function make-report
+    Worker->>Worker: Step 1: step.sleep("do-the-slow-work", "8s")
+    Worker->>Worker: Step 2: step.run("build-report")
+    Worker->>FastAPI: Update state in memory (status=done)
+    
+    Client->>FastAPI: GET /reports/{id}
+    FastAPI-->>Client: HTTP 200 OK {"id": "uuid", "status": "done", "result": "..."}
+```
+
+---
+
+## Service Operations
+
+### Prerequisite Environment Setup
+
+Ensure Python dependencies are installed:
+
+```bash
+pip install fastapi uvicorn inngest httpx
+```
+
+### Server Startup Commands
+
+Two concurrent server processes are required for local execution:
+
+#### 1. FastAPI Application Server
+
 ```bash
 uvicorn main:app --reload
 ```
-*App runs at:* `http://localhost:8000`
+- **Service Endpoint:** `http://localhost:8000`
+- **Interactive Documentation:** `http://localhost:8000/docs`
 
-### 2. Start the Inngest Dev Server
+#### 2. Inngest Development Server
+
 ```bash
 npx inngest-cli@latest dev -u http://localhost:8000/api/inngest
 ```
-*Inngest Dashboard available at:* `http://localhost:8288`
+- **Dev Dashboard:** `http://localhost:8288`
+- **Inngest Route:** `http://localhost:8000/api/inngest`
 
 ---
 
-## 📊 Summary of API Endpoints & Inngest Functions
+## System Interface Specifications
 
 ### API Endpoints
 
-| Method | Endpoint | Description | Expected Status Codes |
+| Method | Route | Description | Response Status Codes |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/health` | Server health check | `200 OK` |
-| `POST` | `/reports` | Request a background report generation | `202 Accepted`, `400 Bad Request` |
-| `GET` | `/reports/{id}` | Poll the current state of a report | `200 OK`, `404 Not Found` |
-| `GET/POST/PUT` | `/api/inngest` | Inngest function handler endpoint | `200 OK` |
+| `GET` | `/health` | Application health and status verification | `200 OK` |
+| `POST` | `/reports` | Dispatches background report generation event | `202 Accepted`, `400 Bad Request` |
+| `GET` | `/reports/{id}` | Retrieves current processing status and result | `200 OK`, `404 Not Found` |
+| `ALL` | `/api/inngest` | Inngest communication handler endpoint | `200 OK` |
 
-### Inngest Functions
+### Inngest Background Functions
 
-| Function Name | Trigger | Description | Retries |
+| Function ID | Trigger Specification | Execution Workflow | Retry Policy |
 | :--- | :--- | :--- | :--- |
-| `say-hello` | Event: `test/hello` | Simple test function with a 5s sleep step | 4 (Default) |
-| `make-report` | Event: `report/requested` | Generates report content after an 8s sleep step | 2 |
-| `heartbeat` | Cron: `* * * * *` | Scheduled every minute to calculate and log report state counts | 4 (Default) |
+| `say-hello` | Event: `test/hello` | Performs 5-second sleep step and returns verification message | Standard (4 attempts) |
+| `make-report` | Event: `report/requested` | Performs 8-second sleep step, executes report generator, updates memory state | Configured (2 retries) |
+| `heartbeat` | Cron: `* * * * *` | Runs every minute to calculate summary statistics of report states | Standard (4 attempts) |
 
 ---
 
-## 🧪 Sample Curl Test Outputs
+## Verification & Execution Examples
 
-### 1. Submit Report (Fast 202 Accepted Response)
+### 1. Dispatching a Report Request
+
 ```bash
 curl -X POST http://localhost:8000/reports \
   -H "Content-Type: application/json" \
-  -d '{"topic": "Quantum Computing"}'
+  -d '{"topic": "Machine Learning"}'
 ```
-**Output:**
+
+**Response (Sub-second HTTP 202 Accepted):**
+
 ```json
 {
-  "id": "75bef0fc-346b-416c-abe6-f9f506a1a51d",
+  "id": "e4f8b91a-72cd-4b92-9a10-2b10a3c8e100",
   "status": "pending"
 }
 ```
 
-### 2. Poll Immediately (Pending Status)
+### 2. Status Polling: Initial State (Pending)
+
 ```bash
-curl http://localhost:8000/reports/75bef0fc-346b-416c-abe6-f9f506a1a51d
+curl -i http://localhost:8000/reports/e4f8b91a-72cd-4b92-9a10-2b10a3c8e100
 ```
-**Output:**
-```json
+
+**Response:**
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+
 {
-  "id": "75bef0fc-346b-416c-abe6-f9f506a1a51d",
-  "topic": "Quantum Computing",
+  "id": "e4f8b91a-72cd-4b92-9a10-2b10a3c8e100",
+  "topic": "Machine Learning",
   "status": "pending"
 }
 ```
 
-### 3. Poll After Completion (Done Status)
+### 3. Status Polling: Completed State (Done)
+
 ```bash
-curl http://localhost:8000/reports/75bef0fc-346b-416c-abe6-f9f506a1a51d
+curl -i http://localhost:8000/reports/e4f8b91a-72cd-4b92-9a10-2b10a3c8e100
 ```
-**Output:**
-```json
+
+**Response:**
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+
 {
-  "id": "75bef0fc-346b-416c-abe6-f9f506a1a51d",
-  "topic": "Quantum Computing",
+  "id": "e4f8b91a-72cd-4b92-9a10-2b10a3c8e100",
+  "topic": "Machine Learning",
   "status": "done",
-  "result": "Report content for Quantum Computing"
+  "result": "Report content for Machine Learning"
 }
 ```
 
-### 4. Input Validation (400 Bad Request)
+### 4. Early Input Validation (HTTP 400 Bad Request)
+
 ```bash
-curl -X POST http://localhost:8000/reports \
+curl -i -X POST http://localhost:8000/reports \
   -H "Content-Type: application/json" \
   -d '{"topic": ""}'
 ```
-**Output:**
-```json
+
+**Response:**
+
+```http
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
 {
   "error": "Topic is required"
 }
@@ -108,19 +182,29 @@ curl -X POST http://localhost:8000/reports \
 
 ---
 
-## 🔍 Analysis & Insights
+## Technical Analysis & Operational Considerations
 
-1. **Rejecting Bad Input (400) vs. Retrying Runtime Failures**:
-   - **Rejecting Bad Input at the Door (400 Bad Request)**: Invalid payloads (e.g. missing or empty topic) are client errors. Retrying an invalid request will never succeed and wastes system resources, queuing queues, and worker execution time. Thus, malformed input is caught synchronously at the API boundary and rejected immediately without enqueuing background events.
-   - **Retrying Runtime Failures**: Transient system failures (network timeouts, database connection drops, external API limits) may succeed on subsequent attempts. Retrying these background steps with exponential backoff ensures resilience without impacting client response times.
+### 1. Synchronous Input Validation vs. Asynchronous Retry Semantics
 
-2. **Cron Schedule Reference**:
-   - **Daily at 08:00**: `0 8 * * *`
-   - **Weekly on Sundays at 22:00**: `0 22 * * 0`
+* **Synchronous Input Validation (HTTP 400 at Boundary):**  
+  Malformed inputs, missing fields, or empty strings are deterministically invalid. Attempting to enqueue and retry malformed requests in a background worker consumes queue capacity, compute worker CPU cycles, and network resources unnecessarily while guaranteed to fail repeatedly. Validating requests synchronously at the API gateway level ensures zero pollution of the event queue and immediate failure feedback to the caller.
+
+* **Asynchronous Runtime Failure Retries:**  
+  Operational failures during background execution (e.g., transient network drops, rate limits, or downstream service outages) are nondeterministic. Applying retry policies with exponential backoff at the job worker level isolates transient errors from the client, ensuring eventual consistency and system resilience without blocking client connections.
+
+### 2. Standardized Cron Schedule Specifications
+
+* **Daily Execution at 08:00 UTC:**  
+  `0 8 * * *`
+* **Weekly Execution on Sundays at 22:00 UTC:**  
+  `0 22 * * 0`
 
 ---
 
-## 🖼️ Inngest Dashboard Screenshot Placeholder
+## System Inspection & Monitoring
 
-![Inngest Dashboard Screenshot](./docs/inngest-dashboard.png)
-*(Placeholder reference for attaching a screenshot of the Inngest dashboard showing completed runs, retries, and cron events)*
+### Inngest Dev Dashboard Interface
+
+![Inngest Dashboard Reference](./docs/inngest-dashboard.png)
+
+*Figure 1.0: Inngest Administrative Interface illustrating function execution histories, step-level timing breakdowns, automatic retry attempts, and cron triggers.*

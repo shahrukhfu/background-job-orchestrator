@@ -1,0 +1,47 @@
+<svg fill="none" viewBox="0 0 800 200" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .bg { fill: #0d1117; rx: 12px; }
+    .title { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; font-weight: 700; font-size: 28px; fill: #58a6ff; }
+    .subtitle { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; font-weight: 400; font-size: 15px; fill: #8b949e; }
+    .badge-bg { fill: #161b22; stroke: #30363d; stroke-width: 1px; rx: 6px; }
+    .badge-text { font-family: 'Segoe UI', monospace; font-size: 12px; fill: #79c0ff; font-weight: 600; }
+    .pulse { animation: pulse-animation 2s infinite alternate; }
+    @keyframes pulse-animation {
+      0% { fill: #238636; opacity: 0.7; }
+      100% { fill: #3fb950; opacity: 1; filter: drop-shadow(0px 0px 8px #3fb950); }
+    }
+    .flow-line { stroke: #30363d; stroke-dasharray: 6; animation: dash 20s linear infinite; }
+    @keyframes dash {
+      to { stroke-dashoffset: -100; }
+    }
+  </style>
+
+  <rect class="bg" width="800" height="200" />
+  
+  <!-- Subtle background grid lines -->
+  <line x1="0" y1="50" x2="800" y2="50" stroke="#161b22" stroke-width="1"/>
+  <line x1="0" y1="100" x2="800" y2="100" stroke="#161b22" stroke-width="1"/>
+  <line x1="0" y1="150" x2="800" y2="150" stroke="#161b22" stroke-width="1"/>
+
+  <!-- Title & Subtitle -->
+  <text x="40" y="70" class="title">Background Job Orchestrator</text>
+  <text x="40" y="102" class="subtitle">Event-Driven Asynchronous Processing Engine with FastAPI &amp; Inngest</text>
+
+  <!-- Status Indicator -->
+  <circle cx="45" cy="145" r="6" class="pulse" />
+  <text x="60" y="149" font-family="'Segoe UI', sans-serif" font-size="13" fill="#3fb950" font-weight="600">SYSTEM OPERATIONAL</text>
+
+  <!-- Badges -->
+  <g transform="translate(400, 130)">
+    <rect class="badge-bg" x="0" y="0" width="110" height="28" />
+    <text class="badge-text" x="55" y="18" text-anchor="middle">FastAPI 0.115</text>
+  </g>
+  <g transform="translate(520, 130)">
+    <rect class="badge-bg" x="0" y="0" width="110" height="28" />
+    <text class="badge-text" x="55" y="18" text-anchor="middle">Inngest 0.5</text>
+  </g>
+  <g transform="translate(640, 130)">
+    <rect class="badge-bg" x="0" y="0" width="120" height="28" />
+    <text class="badge-text" x="60" y="18" text-anchor="middle">Python 3.10+</text>
+  </g>
+</svg>
