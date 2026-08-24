@@ -1,19 +1,14 @@
 import uuid
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 import inngest
 import inngest.fast_api
-from pydantic import BaseModel
 
 app = FastAPI()
 
 inngest_client = inngest.Inngest(app_id="report-api")
 
 reports = {}
-
-
-class ReportRequest(BaseModel):
-    topic: str
 
 
 @inngest_client.create_function(
@@ -28,6 +23,7 @@ async def say_hello(ctx: inngest.Context, step: inngest.Step):
 @inngest_client.create_function(
     fn_id="make-report",
     trigger=inngest.TriggerEvent(event="report/requested"),
+    retries=2,
 )
 async def make_report(ctx: inngest.Context, step: inngest.Step):
     await step.sleep("do-the-slow-work", "8s")
@@ -35,6 +31,10 @@ async def make_report(ctx: inngest.Context, step: inngest.Step):
     def build_report():
         report_id = ctx.event.data.get("id")
         topic = ctx.event.data.get("topic")
+
+        if topic == "fail":
+            raise Exception("The report oven is broken!")
+
         report_content = f"Report content for {topic}"
         if report_id in reports:
             reports[report_id]["status"] = "done"
@@ -57,11 +57,32 @@ def health_check():
 
 
 @app.post("/reports", status_code=status.HTTP_202_ACCEPTED)
-async def create_report(body: ReportRequest):
+async def create_report(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Topic is required"},
+        )
+
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Topic is required"},
+        )
+
+    topic = body.get("topic")
+    if not topic or not isinstance(topic, str) or not topic.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Topic is required"},
+        )
+
     report_id = str(uuid.uuid4())
     report_data = {
         "id": report_id,
-        "topic": body.topic,
+        "topic": topic,
         "status": "pending",
     }
     reports[report_id] = report_data
@@ -69,7 +90,7 @@ async def create_report(body: ReportRequest):
     await inngest_client.send(
         inngest.Event(
             name="report/requested",
-            data={"id": report_id, "topic": body.topic},
+            data={"id": report_id, "topic": topic},
         )
     )
 
@@ -87,5 +108,6 @@ def get_report(report_id: str):
             content={"error": "Report not found"},
         )
     return reports[report_id]
+
 
 
