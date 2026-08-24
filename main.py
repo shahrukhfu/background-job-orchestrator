@@ -1,14 +1,25 @@
+import logging
 import uuid
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 import inngest
 import inngest.fast_api
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
 app = FastAPI()
 
 inngest_client = inngest.Inngest(app_id="report-api")
 
 reports = {}
+
+
+async def on_make_report_failure(ctx: inngest.Context, step: inngest.Step):
+    report_id = ctx.event.data.get("id")
+    if report_id in reports:
+        reports[report_id]["status"] = "failed"
+        reports[report_id]["error"] = "The report oven is broken!"
 
 
 @inngest_client.create_function(
@@ -24,6 +35,7 @@ async def say_hello(ctx: inngest.Context, step: inngest.Step):
     fn_id="make-report",
     trigger=inngest.TriggerEvent(event="report/requested"),
     retries=2,
+    on_failure=on_make_report_failure,
 )
 async def make_report(ctx: inngest.Context, step: inngest.Step):
     await step.sleep("do-the-slow-work", "8s")
@@ -44,10 +56,37 @@ async def make_report(ctx: inngest.Context, step: inngest.Step):
     return await step.run("build-report", build_report)
 
 
+@inngest_client.create_function(
+    fn_id="heartbeat",
+    trigger=inngest.TriggerCron(cron="* * * * *"),
+)
+async def heartbeat(ctx: inngest.Context, step: inngest.Step):
+    def count_reports():
+        pending = sum(
+            1 for r in reports.values() if r.get("status") == "pending"
+        )
+        done = sum(1 for r in reports.values() if r.get("status") == "done")
+        failed = sum(
+            1 for r in reports.values() if r.get("status") == "failed"
+        )
+        summary = {
+            "pending": pending,
+            "done": done,
+            "failed": failed,
+            "total": len(reports),
+        }
+        logger.info(
+            f"Heartbeat summary - Pending: {pending}, Done: {done}, Failed: {failed}, Total: {len(reports)}"
+        )
+        return summary
+
+    return await step.run("count-reports", count_reports)
+
+
 inngest.fast_api.serve(
     app,
     inngest_client,
-    [say_hello, make_report],
+    [say_hello, make_report, heartbeat],
 )
 
 
@@ -108,6 +147,7 @@ def get_report(report_id: str):
             content={"error": "Report not found"},
         )
     return reports[report_id]
+
 
 
 
